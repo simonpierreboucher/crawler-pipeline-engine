@@ -1,0 +1,33 @@
+{
+    "crawler": {
+        "start_url": "https://example.com",
+        "max_depth": 3,
+        "use_playwright": false,
+        "download": {
+            "pdf": true,
+            "doc": true,
+            "image": true,
+            "other": false
+        },
+        "output": {
+            "crawler_output_dir": "./output",
+            "checkpoint_file": "./output/checkpoint.json",
+            "logs_dir": "./output/logs",
+            "content_dir": "./output/content",
+            "content_rewritten_dir": "./output/content_rewritten"
+        },
+        "limits": {
+            "max_tokens": 2048,
+            "concurrency": 5,
+            "max_urls": null
+        },
+        "verbose": false
+    },
+    "llm": {
+        "provider": "openai",
+        "api_keys": ["your_openai_api_key1", "your_openai_api_key2"],
+        "max_tokens": 2048,
+        "concurrency": 5,
+        "system_prompt_file": "./prompt.txt"  // <-- Nouveau champ ajouté
+    }
+}
