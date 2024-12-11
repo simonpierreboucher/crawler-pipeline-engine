@@ -1,8 +1,8 @@
 {
     "crawler": {
-        "start_url": "https://example.com",
+        "start_url": "url",
         "max_depth": 3,
-        "use_playwright": false,
+        "use_playwright": true,
         "download": {
             "pdf": true,
             "doc": true,
@@ -11,10 +11,16 @@
         },
         "output": {
             "crawler_output_dir": "./output",
-            "checkpoint_file": "./output/checkpoint.json",
-            "logs_dir": "./output/logs",
-            "content_dir": "./output/content",
-            "content_rewritten_dir": "./output/content_rewritten"
+            "checkpoint_file": "checkpoint.json",
+            "logs_dir": "logs",
+            "content_dir": "content",
+            "content_rewritten_dir": "content_rewritten",
+            "PDF": "PDF",
+            "Image": "Image",
+            "Doc": "Doc",
+            "Archive": "Archive",
+            "Audio": "Audio",
+            "Video": "Video"
         },
         "limits": {
             "max_tokens": 2048,
@@ -25,9 +31,9 @@
     },
     "llm": {
         "provider": "openai",
-        "api_keys": ["your_openai_api_key1", "your_openai_api_key2"],
+        "api_keys": ["api"],
         "max_tokens": 2048,
         "concurrency": 5,
-        "system_prompt_file": "./prompt.txt"  // <-- Nouveau champ ajouté
+        "system_prompt_file": "./prompt.txt"
     }
 }
