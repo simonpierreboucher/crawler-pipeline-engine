@@ -25,13 +25,13 @@ from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, 
 from rich.logging import RichHandler
 from rich.console import Console
 
-# Configuration des variables globales
+# Configuration of global variables
 CONTENT_REWRITER_OUTPUT_DIR = "./output/content_rewritten"
 
-# Mutex pour synchronisation des accès aux métriques
+# Mutex for synchronizing access to metrics
 metrics_lock = threading.Lock()
 
-# Initialisation des métriques
+# Initialization of metrics
 metrics = {
     "urls_extracted": 0,
     "pages_extracted": 0,
@@ -40,25 +40,63 @@ metrics = {
     "errors": []
 }
 
-# Classe ContentRewriter
 class ContentRewriter:
-    def __init__(self, input_dir, output_dir, api_keys, model="openai", verbose=False, max_tokens=2048, concurrency=5):
+    """
+    A class responsible for rewriting content using a specified LLM provider.
+    
+    Attributes:
+        input_dir (Path): Directory containing input text files.
+        output_dir (Path): Directory where rewritten content will be saved.
+        api_keys (List[str]): List of API keys for the LLM provider.
+        system_prompt (str): System prompt loaded from an external file.
+        model (str): The LLM model to use.
+        verbose (bool): Flag to enable verbose logging.
+        max_tokens (int): Maximum number of tokens per API request.
+        concurrency (int): Number of concurrent threads for processing.
+    """
+    def __init__(
+        self, 
+        input_dir: str, 
+        output_dir: str, 
+        api_keys: List[str], 
+        system_prompt: str, 
+        model: str = "openai", 
+        verbose: bool = False, 
+        max_tokens: int = 2048, 
+        concurrency: int = 5
+    ):
+        """
+        Initializes the ContentRewriter with the provided configuration.
+        
+        Args:
+            input_dir (str): Directory containing input text files.
+            output_dir (str): Directory where rewritten content will be saved.
+            api_keys (List[str]): List of API keys for the LLM provider.
+            system_prompt (str): System prompt loaded from an external file.
+            model (str, optional): The LLM model to use. Defaults to "openai".
+            verbose (bool, optional): Flag to enable verbose logging. Defaults to False.
+            max_tokens (int, optional): Maximum number of tokens per API request. Defaults to 2048.
+            concurrency (int, optional): Number of concurrent threads for processing. Defaults to 5.
+        """
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         self.api_keys = api_keys if api_keys else []
         if not self.api_keys:
-            raise ValueError("Au moins une clé API est requise pour la réécriture de contenu.")
+            raise ValueError("At least one API key is required for content rewriting.")
         self.api_keys_cycle = cycle(self.api_keys)
         self.lock = threading.Lock()
         
         self.model = model.lower()
         self.verbose = verbose
-        self.max_tokens = max_tokens  # Limite de tokens par requête
-        self.concurrency = concurrency  # Nombre de threads simultanés
+        self.max_tokens = max_tokens  # Token limit per request
+        self.concurrency = concurrency  # Number of simultaneous threads
         
-        # Configuration du logging avec Rich
+        # Store the system prompt
+        self.system_prompt = system_prompt
+        
+        # Configure logging with Rich
         logging.basicConfig(
             level=logging.INFO if not verbose else logging.DEBUG,
             format='%(message)s',
@@ -69,16 +107,30 @@ class ContentRewriter:
 
         self.console = Console()
 
-    def get_next_api_key(self):
+    def get_next_api_key(self) -> Optional[str]:
+        """
+        Retrieves the next API key in a cyclic manner.
+        
+        Returns:
+            Optional[str]: The next API key, or None if no keys are available.
+        """
         with self.lock:
-            return next(self.api_keys_cycle)
+            try:
+                return next(self.api_keys_cycle)
+            except StopIteration:
+                return None
 
     def split_text_into_chunks(self, text: str) -> List[str]:
         """
-        Divise le texte en segments basés sur le nombre de tokens.
-        Approche simple basée sur la longueur des caractères.
+        Splits the input text into manageable chunks based on the maximum token limit.
+        
+        Args:
+            text (str): The text to be split.
+        
+        Returns:
+            List[str]: A list of text chunks.
         """
-        avg_chars_per_token = 4  # Estimation moyenne
+        avg_chars_per_token = 4  # Average estimation
         max_chars = self.max_tokens * avg_chars_per_token
         paragraphs = text.split('\n\n')
         chunks = []
@@ -95,19 +147,28 @@ class ContentRewriter:
         if current_chunk:
             chunks.append(current_chunk.strip())
         
-        self.logger.debug(f"Texte divisé en {len(chunks)} segments.")
+        self.logger.debug(f"Text split into {len(chunks)} chunks.")
         return chunks
 
     def rewrite_chunk(self, chunk: str, document_name: str, file_name: str) -> Optional[str]:
-        system_prompt = (
-            "Vous êtes un expert en réécriture de contenu. Reformulez le texte ci-dessous pour améliorer sa clarté et sa lisibilité tout en conservant le sens original."
-        )
+        """
+        Rewrites a single chunk of text using the LLM API.
+        
+        Args:
+            chunk (str): The text chunk to rewrite.
+            document_name (str): Name of the document being processed.
+            file_name (str): Name of the file being processed.
+        
+        Returns:
+            Optional[str]: The rewritten text, or None if an error occurred.
+        """
+        system_prompt = self.system_prompt
         user_content = chunk
 
         api_key = self.get_next_api_key()
         if not api_key:
-            self.logger.error("Aucune clé API disponible pour la réécriture.")
-            self._update_metrics('errors', "Aucune clé API disponible pour la réécriture.")
+            self.logger.error("No API key available for rewriting.")
+            self._update_metrics('errors', "No API key available for rewriting.")
             return None
 
         if self.model == "openai":
@@ -158,23 +219,23 @@ class ContentRewriter:
                 "stream": False
             }
         else:
-            self.logger.error(f"Fournisseur LLM inconnu : {self.model}")
-            self._update_metrics('errors', f"Fournisseur LLM inconnu : {self.model}")
+            self.logger.error(f"Unknown LLM provider: {self.model}")
+            self._update_metrics('errors', f"Unknown LLM provider: {self.model}")
             return None
 
         if self.verbose:
-            self.logger.debug(f"Appel LLM {self.model} pour {document_name} : Payload size {len(user_content)}")
+            self.logger.debug(f"Calling LLM {self.model} for {document_name}: Payload size {len(user_content)}")
 
         try:
             response = requests.post(endpoint, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
         except requests.HTTPError as e:
-            self.logger.error(f"Erreur API LLM {self.model} : {str(e)}, réponse : {response.text}")
-            self._update_metrics('errors', f"Erreur API LLM {self.model} : {str(e)}, réponse : {response.text}")
+            self.logger.error(f"LLM API error {self.model}: {str(e)}, response: {response.text}")
+            self._update_metrics('errors', f"LLM API error {self.model}: {str(e)}, response: {response.text}")
             return None
         except Exception as e:
-            self.logger.error(f"Erreur lors de l'appel LLM {self.model} : {str(e)}")
-            self._update_metrics('errors', f"Erreur lors de l'appel LLM {self.model} : {str(e)}")
+            self.logger.error(f"Error calling LLM {self.model}: {str(e)}")
+            self._update_metrics('errors', f"Error calling LLM {self.model}: {str(e)}")
             return None
 
         response_json = response.json()
@@ -189,21 +250,30 @@ class ContentRewriter:
 
         return rewritten_text
 
-    def rewrite_file(self, file_path):
+    def rewrite_file(self, file_path: Path) -> bool:
+        """
+        Rewrites the content of a single file using the LLM API.
+        
+        Args:
+            file_path (Path): Path to the file to be rewritten.
+        
+        Returns:
+            bool: True if rewriting was successful, False otherwise.
+        """
         document_name = file_path.stem
-        self.logger.info(f"Réécriture du contenu de {file_path.name}")
+        self.logger.info(f"Rewriting content of {file_path.name}")
 
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
         except Exception as e:
-            self.logger.error(f"Erreur lors de la lecture de {file_path.name} : {str(e)}")
-            self._update_metrics('errors', f"Erreur lors de la lecture de {file_path.name} : {str(e)}")
+            self.logger.error(f"Error reading {file_path.name}: {str(e)}")
+            self._update_metrics('errors', f"Error reading {file_path.name}: {str(e)}")
             return False
 
         if not text.strip():
-            self.logger.warning(f"Aucun texte à réécrire dans {file_path.name}")
-            self._update_metrics('errors', f"Aucun texte à réécrire dans {file_path.name}")
+            self.logger.warning(f"No text to rewrite in {file_path.name}")
+            self._update_metrics('errors', f"No text to rewrite in {file_path.name}")
             return False
 
         chunks = self.split_text_into_chunks(text)
@@ -219,7 +289,7 @@ class ContentRewriter:
             transient=True,
             console=self.console
         ) as progress:
-            task = progress.add_task(f"Réécriture {file_path.name}", total=total_chunks)
+            task = progress.add_task(f"Rewriting {file_path.name}", total=total_chunks)
 
             def process_chunk(index, chunk):
                 rewritten = self.rewrite_chunk(chunk, document_name, file_path.name)
@@ -233,11 +303,11 @@ class ContentRewriter:
                     try:
                         future.result()
                     except Exception as e:
-                        self.logger.error(f"Erreur lors de la réécriture du segment {idx + 1}: {str(e)}")
-                        self._update_metrics('errors', f"Erreur lors de la réécriture du segment {idx + 1}: {str(e)}")
+                        self.logger.error(f"Error rewriting segment {idx + 1}: {str(e)}")
+                        self._update_metrics('errors', f"Error rewriting segment {idx + 1}: {str(e)}")
 
         if any(chunk is None for chunk in rewritten_chunks):
-            self.logger.warning(f"Réécriture partielle échouée pour {file_path.name}")
+            self.logger.warning(f"Partial rewriting failed for {file_path.name}")
             return False
 
         rewritten_text = "\n\n".join(rewritten_chunks)
@@ -245,21 +315,24 @@ class ContentRewriter:
         try:
             with open(output_file_name, 'w', encoding='utf-8') as f:
                 f.write(rewritten_text)
-            self.logger.info(f"Fichier réécrit créé : {output_file_name}")
+            self.logger.info(f"Rewritten file created: {output_file_name}")
             self._update_metrics('pages_rewritten', 1)
             return True
         except Exception as e:
-            self.logger.error(f"Erreur lors de la sauvegarde de {file_path} : {str(e)}")
-            self._update_metrics('errors', f"Erreur lors de la sauvegarde de {file_path} : {str(e)}")
+            self.logger.error(f"Error saving {file_path}: {str(e)}")
+            self._update_metrics('errors', f"Error saving {file_path}: {str(e)}")
             return False
 
     def rewrite_all_contents(self):
+        """
+        Rewrites all content files in the input directory.
+        """
         txt_files = list(self.input_dir.glob('*.txt'))
         total_files = len(txt_files)
-        self.logger.info(f"Démarrage de la réécriture de {total_files} fichier(s)")
+        self.logger.info(f"Starting rewriting of {total_files} file(s)")
 
         if total_files == 0:
-            self.logger.info("Aucun fichier à réécrire.")
+            self.logger.info("No files to rewrite.")
             return
 
         with Progress(
@@ -270,7 +343,7 @@ class ContentRewriter:
             TimeRemainingColumn(),
             console=self.console
         ) as progress:
-            task = progress.add_task("Réécriture des fichiers", total=total_files)
+            task = progress.add_task("Rewriting files", total=total_files)
 
             with ThreadPoolExecutor(max_workers=self.concurrency) as executor:
                 futures = {executor.submit(self.rewrite_file, txt_file_path): txt_file_path for txt_file_path in txt_files}
@@ -280,15 +353,22 @@ class ContentRewriter:
                     try:
                         result = future.result()
                         if result:
-                            self.logger.info(f"Réécriture réussie pour {txt_file_path.name}")
+                            self.logger.info(f"Rewriting successful for {txt_file_path.name}")
                         progress.advance(task)
                     except Exception as e:
-                        self.logger.error(f"Erreur lors de la réécriture de {txt_file_path.name} : {str(e)}")
-                        self._update_metrics('errors', f"Erreur lors de la réécriture de {txt_file_path.name} : {str(e)}")
+                        self.logger.error(f"Error rewriting {txt_file_path.name}: {str(e)}")
+                        self._update_metrics('errors', f"Error rewriting {txt_file_path.name}: {str(e)}")
                         progress.advance(task)
-        self.logger.info("Réécriture de contenu terminée.")
+        self.logger.info("Content rewriting completed.")
 
-    def _update_metrics(self, key, value):
+    def _update_metrics(self, key: str, value):
+        """
+        Updates the global metrics in a thread-safe manner.
+        
+        Args:
+            key (str): The metric key to update.
+            value: The value to add or append.
+        """
         with metrics_lock:
             if key == 'errors':
                 metrics['errors'].append(value)
@@ -297,22 +377,33 @@ class ContentRewriter:
             else:
                 metrics[key] = value
 
-# Classe WebCrawler
+
 class WebCrawler:
-    def __init__(
-        self,
-        config: dict
-    ):
-        # Charger la configuration via Pydantic
+    """
+    A class representing the web crawler responsible for extracting URLs, downloading files,
+    extracting content, and rewriting content using an LLM.
+    
+    Attributes:
+        config (dict): Configuration dictionary loaded from a JSON file.
+    """
+    def __init__(self, config: dict):
+        """
+        Initializes the WebCrawler with the provided configuration.
+        
+        Args:
+            config (dict): Configuration dictionary loaded from a JSON file.
+        """
+        # Load the configuration using Pydantic
         try:
-            self.config = CrawlerConfig.parse_obj(config)
+            self.config = CrawlerConfig.parse_obj(config['crawler'])
+            self.llm_config = LLMConfig.parse_obj(config['llm'])
         except ValidationError as e:
-            print("Erreur de validation de la configuration :", e)
+            print("Configuration validation error:", e)
             raise
 
-        # Extraire les configurations
-        crawler_conf = self.config.crawler
-        llm_conf = self.config.llm
+        # Extract configurations
+        crawler_conf = self.config
+        llm_conf = self.llm_config
 
         self.start_url = crawler_conf.start_url
         self.max_depth = crawler_conf.max_depth
@@ -337,7 +428,7 @@ class WebCrawler:
 
         self.excluded_paths = ['selecteur-de-produits']
 
-        # Configuration du logging avec Rich
+        # Configure logging with Rich
         (self.base_dir / crawler_conf.output.logs_dir).mkdir(parents=True, exist_ok=True)
         logging.basicConfig(
             level=logging.DEBUG if crawler_conf.verbose else logging.INFO,
@@ -392,7 +483,8 @@ class WebCrawler:
             'Video': {
                 'video/mp4': '.mp4',
                 'video/x-msvideo': '.avi',
-                'video/quicktime': '.mov'
+                'video/quicktime': '.mov',
+                'video/x-matroska': '.mkv'
             }
         }
 
@@ -403,14 +495,14 @@ class WebCrawler:
         self.html_converter.ignore_images = True
         self.html_converter.single_line_break = False
 
-        # Extraire le pattern de langue depuis l'URL de départ (optionnel)
+        # Extract language pattern from the start URL (optional)
         self.language_path = re.search(r'/(fr|en)-(ca|us)/', self.start_url)
         self.language_pattern = self.language_path.group(0) if self.language_path else None
 
-        # Création des dossiers
+        # Create necessary directories
         self.create_directories()
 
-        # Playwright (synchronous usage)
+        # Initialize Playwright if enabled
         self.playwright = None
         self.browser = None
         self.page = None
@@ -429,12 +521,33 @@ class WebCrawler:
         # Control variables
         self.stop_event = threading.Event()
 
-        # Instancier le ContentRewriter si llm_enabled
+        # Load the system prompt from the specified file
+        system_prompt_file = llm_conf.system_prompt_file
+        if system_prompt_file:
+            try:
+                with open(system_prompt_file, 'r', encoding='utf-8') as f:
+                    system_prompt = f.read().strip()
+                self.logger.info(f"System prompt loaded from {system_prompt_file}")
+            except Exception as e:
+                self.logger.error(f"Error loading prompt file {system_prompt_file}: {str(e)}")
+                self._update_metrics('errors', f"Error loading prompt file {system_prompt_file}: {str(e)}")
+                system_prompt = (
+                    "You are an expert content rewriter. Reformulate the text below to improve its clarity and readability while preserving the original meaning."
+                )
+                self.logger.info("Using default system prompt.")
+        else:
+            system_prompt = (
+                "You are an expert content rewriter. Reformulate the text below to improve its clarity and readability while preserving the original meaning."
+            )
+            self.logger.info("No prompt file specified, using default system prompt.")
+
+        # Instantiate the ContentRewriter with the loaded system prompt
         rewriter_output_dir = crawler_conf.output.content_rewritten_dir
         self.content_rewriter = ContentRewriter(
             input_dir=str(self.base_dir / crawler_conf.output.content_dir),
             output_dir=rewriter_output_dir,
             api_keys=self.api_keys,
+            system_prompt=system_prompt,
             model=self.llm_provider if self.llm_provider else "openai",
             verbose=crawler_conf.verbose,
             max_tokens=crawler_conf.limits.max_tokens,
@@ -442,6 +555,12 @@ class WebCrawler:
         )
 
     def setup_session(self) -> requests.Session:
+        """
+        Sets up a requests session with retry strategy.
+        
+        Returns:
+            requests.Session: Configured session object.
+        """
         session = requests.Session()
         retry_strategy = requests.adapters.Retry(
             total=5,
@@ -460,29 +579,59 @@ class WebCrawler:
         return session
 
     def create_directories(self):
+        """
+        Creates all necessary directories for the crawler based on the configuration.
+        """
         directories = [
-            self.config.crawler.output.content_dir,
-            self.config.crawler.output.PDF,
-            self.config.crawler.output.Image,
-            self.config.crawler.output.Doc,
-            self.config.crawler.output.Archive,
-            self.config.crawler.output.Audio,
-            self.config.crawler.output.Video,
-            self.config.crawler.output.logs_dir,
-            self.config.crawler.output.content_rewritten_dir
+            self.config.output.content_dir,
+            self.config.output.PDF,
+            self.config.output.Image,
+            self.config.output.Doc,
+            self.config.output.Archive,
+            self.config.output.Audio,
+            self.config.output.Video,
+            self.config.output.logs_dir,
+            self.config.output.content_rewritten_dir
         ]
         for dir_path in directories:
             Path(dir_path).mkdir(parents=True, exist_ok=True)
 
     def should_exclude(self, url: str) -> bool:
+        """
+        Determines whether a URL should be excluded based on predefined paths.
+        
+        Args:
+            url (str): The URL to evaluate.
+        
+        Returns:
+            bool: True if the URL should be excluded, False otherwise.
+        """
         return any(excluded in url for excluded in self.excluded_paths)
 
     def is_same_language(self, url: str) -> bool:
+        """
+        Checks if the URL matches the language pattern extracted from the start URL.
+        
+        Args:
+            url (str): The URL to evaluate.
+        
+        Returns:
+            bool: True if the URL matches the language pattern or if no pattern is set, False otherwise.
+        """
         if not self.language_pattern:
             return True
         return self.language_pattern in url
 
     def is_downloadable_file(self, url: str) -> bool:
+        """
+        Determines if a URL points to a downloadable file based on its extension.
+        
+        Args:
+            url (str): The URL to evaluate.
+        
+        Returns:
+            bool: True if the URL points to a downloadable file, False otherwise.
+        """
         path = urlparse(url).path.lower()
         if not self.all_downloadable_exts:
             return False
@@ -490,9 +639,18 @@ class WebCrawler:
         return bool(pattern.search(path))
 
     def head_or_get(self, url: str) -> Optional[requests.Response]:
+        """
+        Attempts to retrieve the headers of a URL using HEAD, falling back to GET if necessary.
+        
+        Args:
+            url (str): The URL to retrieve.
+        
+        Returns:
+            Optional[requests.Response]: The HTTP response, or None if the request fails.
+        """
         try:
             r = self.session.head(url, allow_redirects=True, timeout=10)
-            if r.status_code == 405:  # Méthode non autorisée, tenter GET
+            if r.status_code == 405:  # Method Not Allowed, try GET
                 r = self.session.get(url, allow_redirects=True, timeout=10, stream=True)
             return r
         except:
@@ -501,7 +659,17 @@ class WebCrawler:
             except:
                 return None
 
-    def get_file_type_and_extension(self, url: str, response: requests.Response):
+    def get_file_type_and_extension(self, url: str, response: requests.Response) -> (Optional[str], Optional[str]):
+        """
+        Determines the file type and appropriate extension based on the URL and response headers.
+        
+        Args:
+            url (str): The URL of the file.
+            response (requests.Response): The HTTP response object.
+        
+        Returns:
+            (Optional[str], Optional[str]): A tuple containing the file type and extension.
+        """
         if response is None:
             return None, None
         path = urlparse(url).path.lower()
@@ -520,6 +688,16 @@ class WebCrawler:
         return None, None
 
     def sanitize_filename(self, url: str, extension: str) -> str:
+        """
+        Generates a sanitized filename based on the URL and file extension.
+        
+        Args:
+            url (str): The URL of the file.
+            extension (str): The file extension.
+        
+        Returns:
+            str: A sanitized filename.
+        """
         url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
         filename = url.split('/')[-1] or 'index'
         filename = re.sub(r'[^\w\-_.]', '_', filename)
@@ -530,6 +708,15 @@ class WebCrawler:
         return sanitized
 
     def download_file(self, url: str) -> bool:
+        """
+        Downloads a file from the specified URL.
+        
+        Args:
+            url (str): The URL of the file to download.
+        
+        Returns:
+            bool: True if the download was successful, False otherwise.
+        """
         if self.stop_event.is_set():
             return False
 
@@ -546,7 +733,7 @@ class WebCrawler:
             return False
 
         if file_type_detected not in self.downloadable_extensions:
-            self.logger.info(f"File type {file_type_detected} not enabled pour le téléchargement.")
+            self.logger.info(f"File type {file_type_detected} not enabled for download.")
             return False
 
         self.logger.info(f"Attempting to download {file_type_detected} file from: {url}")
@@ -580,6 +767,15 @@ class WebCrawler:
             return False
 
     def fetch_page_content(self, url: str) -> Optional[str]:
+        """
+        Fetches the HTML content of a web page.
+        
+        Args:
+            url (str): The URL of the web page.
+        
+        Returns:
+            Optional[str]: The HTML content as a string, or None if fetching fails.
+        """
         if self.use_playwright and self.page:
             try:
                 self.page.goto(url, timeout=20000)
@@ -604,6 +800,16 @@ class WebCrawler:
                 return None
 
     def convert_links_to_absolute(self, soup: BeautifulSoup, base_url: str) -> BeautifulSoup:
+        """
+        Converts all relative links in the soup object to absolute URLs.
+        
+        Args:
+            soup (BeautifulSoup): The BeautifulSoup object containing HTML.
+            base_url (str): The base URL to resolve relative links.
+        
+        Returns:
+            BeautifulSoup: The modified BeautifulSoup object with absolute links.
+        """
         for tag in soup.find_all(['a', 'embed', 'iframe', 'object'], href=True):
             attr = 'href' if tag.name == 'a' else 'src'
             href = tag.get(attr)
@@ -613,6 +819,15 @@ class WebCrawler:
         return soup
 
     def clean_text(self, text: str) -> str:
+        """
+        Cleans the extracted text by removing unwanted characters and excess whitespace.
+        
+        Args:
+            text (str): The text to clean.
+        
+        Returns:
+            str: The cleaned text.
+        """
         if not text:
             return ""
         text = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', text)
@@ -621,10 +836,16 @@ class WebCrawler:
         return text.strip()
 
     def extract_urls(self, start_url: str):
+        """
+        Extracts URLs from the website starting from the start_url up to the specified depth and limits.
+        
+        Args:
+            start_url (str): The starting URL for the crawler.
+        """
         queue = deque([(start_url, 0)])
         self.visited_pages.add(start_url)
         crawled_count = 0
-        total_estimated = self.max_urls if self.max_urls else 1000  # Estimation pour la barre de progression
+        total_estimated = self.max_urls if self.max_urls else 1000  # Estimate for progress bar
 
         with Progress(
             SpinnerColumn(),
@@ -634,7 +855,7 @@ class WebCrawler:
             TimeRemainingColumn(),
             console=self.console
         ) as progress:
-            task = progress.add_task("Extraction des URLs", total=total_estimated)
+            task = progress.add_task("Extracting URLs", total=total_estimated)
 
             while queue:
                 if self.stop_event.is_set():
@@ -699,9 +920,15 @@ class WebCrawler:
                 self.stats['urls_found'] += len(child_links)
                 self._update_metrics('urls_extracted', len(child_links))
 
-        self.logger.info("Extraction des URLs terminée.")
+        self.logger.info("URL extraction completed.")
 
     def extract_content(self, url: str):
+        """
+        Extracts and processes the main content from a given URL.
+        
+        Args:
+            url (str): The URL to extract content from.
+        """
         if self.is_downloadable_file(url):
             self.logger.debug(f"Skipping content extraction for downloadable file: {url}")
             return
@@ -736,14 +963,14 @@ class WebCrawler:
 
         if content:
             filename = self.sanitize_filename(url, '.txt')
-            save_path = self.base_dir / self.config.crawler.output.content_dir / filename
+            save_path = self.base_dir / self.config.output.content_dir / filename
             try:
                 with open(save_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 self.stats['pages_processed'] += 1
                 self._update_metrics('pages_extracted', 1)
 
-                # Appel du réécrivain de contenu immédiatement après la sauvegarde
+                # Call the content rewriter immediately after saving
                 rewrite_success = self.content_rewriter.rewrite_file(save_path)
                 if rewrite_success:
                     self.logger.info(f"Content rewriting successful for {filename}")
@@ -764,7 +991,10 @@ class WebCrawler:
                     self.download_file(file_url)
 
     def load_downloaded_files(self):
-        downloaded_files_path = self.base_dir / self.config.crawler.output.logs_dir / 'downloaded_files.txt'
+        """
+        Loads the list of previously downloaded files from a tracking file.
+        """
+        downloaded_files_path = self.base_dir / self.config.output.logs_dir / 'downloaded_files.txt'
         if downloaded_files_path.exists():
             try:
                 with open(downloaded_files_path, 'r', encoding='utf-8') as f:
@@ -778,7 +1008,10 @@ class WebCrawler:
             self.logger.info("No downloaded files tracking file found, starting fresh.")
 
     def save_downloaded_files(self):
-        downloaded_files_path = self.base_dir / self.config.crawler.output.logs_dir / 'downloaded_files.txt'
+        """
+        Saves the list of downloaded files to a tracking file.
+        """
+        downloaded_files_path = self.base_dir / self.config.output.logs_dir / 'downloaded_files.txt'
         try:
             with open(downloaded_files_path, 'w', encoding='utf-8') as f:
                 for url in sorted(self.downloaded_files):
@@ -789,6 +1022,13 @@ class WebCrawler:
             self._update_metrics('errors', f"Error saving downloaded files tracking: {str(e)}")
 
     def generate_report(self, duration: float, error: Optional[str] = None):
+        """
+        Generates a JSON report of the crawling process.
+        
+        Args:
+            duration (float): Duration of the crawling process in seconds.
+            error (Optional[str], optional): Error message if any occurred. Defaults to None.
+        """
         report_data = {
             "configuration": {
                 "start_url": self.start_url,
@@ -819,6 +1059,9 @@ class WebCrawler:
             self._update_metrics('errors', f"Error generating JSON report: {str(e)}")
 
     def generate_xml_sitemap(self):
+        """
+        Generates an XML sitemap of the crawled website.
+        """
         visited = set()
 
         def add_page_element(parent_elem, url):
@@ -842,6 +1085,9 @@ class WebCrawler:
             self._update_metrics('errors', f"Error generating XML sitemap: {str(e)}")
 
     def save_checkpoint(self):
+        """
+        Saves the current state of the crawler to a checkpoint file.
+        """
         checkpoint_data = {
             "visited_pages": list(self.visited_pages),
             "downloaded_files": list(self.downloaded_files),
@@ -857,6 +1103,9 @@ class WebCrawler:
             self._update_metrics('errors', f"Error saving checkpoint: {str(e)}")
 
     def load_checkpoint(self):
+        """
+        Loads the crawler state from a checkpoint file if it exists.
+        """
         if self.checkpoint_file.exists():
             try:
                 with open(self.checkpoint_file, 'r', encoding='utf-8') as f:
@@ -871,6 +1120,10 @@ class WebCrawler:
                 self._update_metrics('errors', f"Error loading checkpoint: {str(e)}")
 
     def crawl(self):
+        """
+        Starts the crawling process, encompassing URL extraction, content extraction, content rewriting,
+        and report generation.
+        """
         start_time = time.time()
         self.logger.info(f"Starting crawl of {self.start_url}")
 
@@ -878,20 +1131,20 @@ class WebCrawler:
         self.load_checkpoint()
         error = None
         try:
-            # Phase 1: Extraction des URLs
+            # Phase 1: URL Extraction
             self.logger.info("Phase 1: Starting URL extraction")
             if not self.visited_pages:
-                # Pas de checkpoint, on commence
+                # No checkpoint, start extraction
                 self.extract_urls(self.start_url)
-                self.save_checkpoint()  # sauvegarde après extraction URLs
+                self.save_checkpoint()  # Save after URL extraction
             else:
                 self.logger.info("Checkpoint found, skipping URL extraction phase.")
 
-            # Phase 2: Extraction du contenu
+            # Phase 2: Content Extraction
             self.logger.info("Phase 2: Starting content extraction")
             total_pages = len(self.visited_pages)
             if total_pages == 0:
-                self.logger.info("Aucune page à traiter.")
+                self.logger.info("No pages to process.")
             else:
                 with Progress(
                     SpinnerColumn(),
@@ -901,7 +1154,7 @@ class WebCrawler:
                     TimeRemainingColumn(),
                     console=self.console
                 ) as progress:
-                    task = progress.add_task("Extraction du contenu", total=total_pages)
+                    task = progress.add_task("Extracting content", total=total_pages)
 
                     with ThreadPoolExecutor(max_workers=self.concurrency) as executor:
                         futures = {executor.submit(self.extract_content, url): url for url in self.visited_pages}
@@ -911,19 +1164,19 @@ class WebCrawler:
                                 future.result()
                                 progress.advance(task)
                             except Exception as e:
-                                self.logger.error(f"Erreur lors de l'extraction de {url}: {str(e)}")
-                                self._update_metrics('errors', f"Erreur lors de l'extraction de {url}: {str(e)}")
+                                self.logger.error(f"Error extracting {url}: {str(e)}")
+                                self._update_metrics('errors', f"Error extracting {url}: {str(e)}")
                                 progress.advance(task)
                 self.logger.info("Phase 2: Completed content extraction")
 
             self.save_checkpoint()
 
-            # Phase 3: Réécriture du contenu
+            # Phase 3: Content Rewriting
             if self.llm_enabled:
                 self.logger.info("Phase 3: Starting content rewriting")
                 self.content_rewriter.rewrite_all_contents()
 
-            # Génération des rapports
+            # Report Generation
             end_time = time.time()
             duration = end_time - start_time
             self.generate_report(duration, error=error)
@@ -941,10 +1194,20 @@ class WebCrawler:
             self.playwright.stop()
 
     def stop_crawl(self):
+        """
+        Signals the crawler to stop the crawling process.
+        """
         self.logger.info("Stop signal received. Stopping crawler...")
         self.stop_event.set()
 
-    def _update_metrics(self, key, value):
+    def _update_metrics(self, key: str, value):
+        """
+        Updates the global metrics in a thread-safe manner.
+        
+        Args:
+            key (str): The metric key to update.
+            value: The value to add or append.
+        """
         with metrics_lock:
             if key == 'errors':
                 metrics['errors'].append(value)
@@ -953,14 +1216,34 @@ class WebCrawler:
             else:
                 metrics[key] = value
 
-# Classes Pydantic pour la configuration
+
+# Pydantic configuration classes
 class DownloadConfig(BaseModel):
+    """
+    Configuration for download options.
+    
+    Attributes:
+        pdf (bool): Enable downloading of PDF files.
+        doc (bool): Enable downloading of document files.
+        image (bool): Enable downloading of image files.
+        other (bool): Enable downloading of other file types.
+    """
     pdf: bool = False
     doc: bool = False
     image: bool = False
     other: bool = False
 
 class OutputConfig(BaseModel):
+    """
+    Configuration for output directories and files.
+    
+    Attributes:
+        crawler_output_dir (str): Directory for crawler outputs.
+        checkpoint_file (str): Path to the checkpoint file.
+        logs_dir (str): Directory for log files.
+        content_dir (str): Directory for extracted content.
+        content_rewritten_dir (str): Directory for rewritten content.
+    """
     crawler_output_dir: str
     checkpoint_file: str
     logs_dir: str
@@ -968,11 +1251,31 @@ class OutputConfig(BaseModel):
     content_rewritten_dir: str
 
 class LimitsConfig(BaseModel):
+    """
+    Configuration for crawling limits.
+    
+    Attributes:
+        max_tokens (int): Maximum number of tokens per API request.
+        concurrency (int): Number of concurrent threads.
+        max_urls (Optional[int]): Maximum number of URLs to crawl.
+    """
     max_tokens: int = 2048
     concurrency: int = 5
     max_urls: Optional[int] = None
 
 class CrawlerConfig(BaseModel):
+    """
+    Overall crawler configuration.
+    
+    Attributes:
+        start_url (str): The starting URL for the crawler.
+        max_depth (int): Maximum depth for crawling.
+        use_playwright (bool): Whether to use Playwright for fetching pages.
+        download (DownloadConfig): Download configuration.
+        output (OutputConfig): Output configuration.
+        limits (LimitsConfig): Crawling limits configuration.
+        verbose (bool): Enable verbose logging.
+    """
     start_url: str
     max_depth: int = 2
     use_playwright: bool = False
@@ -982,31 +1285,65 @@ class CrawlerConfig(BaseModel):
     verbose: bool = False
 
 class LLMConfig(BaseModel):
+    """
+    Configuration for the Language Learning Model (LLM) provider.
+    
+    Attributes:
+        provider (str): The LLM provider (e.g., "openai").
+        api_keys (List[str]): List of API keys for the LLM provider.
+        max_tokens (int): Maximum number of tokens per API request.
+        concurrency (int): Number of concurrent threads for LLM requests.
+        system_prompt_file (str): Path to the system prompt file.
+    """
     provider: str = "openai"
     api_keys: List[str]
     max_tokens: int = 2048
     concurrency: int = 5
+    system_prompt_file: str  # Added field for external prompt file
 
 class Config(BaseModel):
+    """
+    Aggregated configuration containing crawler and LLM configurations.
+    
+    Attributes:
+        crawler (CrawlerConfig): Crawler configuration.
+        llm (LLMConfig): LLM configuration.
+    """
     crawler: CrawlerConfig
     llm: LLMConfig
 
 def load_config(config_path: str = 'config.json') -> dict:
+    """
+    Loads the configuration from a JSON file.
+    
+    Args:
+        config_path (str, optional): Path to the configuration file. Defaults to 'config.json'.
+    
+    Returns:
+        dict: The loaded configuration dictionary.
+    
+    Raises:
+        FileNotFoundError: If the configuration file does not exist.
+        ValueError: If there is a JSON decoding error.
+    """
     if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Le fichier de configuration {config_path} est introuvable.")
+        raise FileNotFoundError(f"The configuration file {config_path} was not found.")
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
         return config_data
     except json.JSONDecodeError as e:
-        raise ValueError(f"Erreur de décodage JSON dans {config_path}: {e}")
+        raise ValueError(f"JSON decoding error in {config_path}: {e}")
 
 def main():
+    """
+    The main function that initializes the crawler and starts the crawling process.
+    """
     try:
         config_data = load_config()
         config = Config.parse_obj(config_data)
     except (FileNotFoundError, ValueError, ValidationError) as e:
-        print(f"Erreur de configuration: {e}")
+        print(f"Configuration error: {e}")
         return
 
     crawler = WebCrawler(config.dict())
