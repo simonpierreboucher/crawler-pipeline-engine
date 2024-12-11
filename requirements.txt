@@ -1,0 +1,6 @@
+requests
+pydantic
+rich
+html2text
+beautifulsoup4
+playwright
