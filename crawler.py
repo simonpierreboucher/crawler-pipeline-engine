@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
 # crawler.py
 
-"""
-Author: Simon-Pierre Boucher
-Université Laval, Québec
-Date: 2024-12-10
-
-Description:
-    This script implements a web crawler capable of extracting URLs, downloading files,
-    extracting content from web pages, and rewriting this content using a specified
-    large language model (LLM) provider. It supports error handling, metric tracking,
-    and generating detailed reports at the end of execution.
-"""
-
 import os
 import json
 import requests
@@ -37,17 +25,13 @@ from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, 
 from rich.logging import RichHandler
 from rich.console import Console
 
-# Suppress insecure SSL warnings
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Configuration of global variables
 CONTENT_REWRITER_OUTPUT_DIR = "./output/content_rewritten"
 
-# Mutex to synchronize access to metrics
 metrics_lock = threading.Lock()
 
-# Initialize metrics
 metrics = {
     "urls_extracted": 0,
     "pages_extracted": 0,
@@ -58,20 +42,6 @@ metrics = {
 
 
 class ContentRewriter:
-    """
-    Class responsible for rewriting content using a specified LLM provider.
-
-    Attributes:
-        input_dir (Path): Directory containing input text files.
-        output_dir (Path): Directory where rewritten content will be saved.
-        api_keys (List[str]): List of API keys for the LLM provider.
-        system_prompt (str): System prompt loaded from an external file.
-        model (str): LLM model to use.
-        verbose (bool): Indicator to enable detailed logging.
-        max_tokens (int): Maximum number of tokens per API request.
-        concurrency (int): Number of concurrent threads for processing.
-    """
-
     def __init__(
         self, 
         input_dir: str, 
@@ -83,38 +53,23 @@ class ContentRewriter:
         max_tokens: int = 2048, 
         concurrency: int = 5
     ):
-        """
-        Initializes the ContentRewriter with the specified parameters.
-
-        Args:
-            input_dir (str): Directory containing input text files.
-            output_dir (str): Directory where rewritten content will be saved.
-            api_keys (List[str]): List of API keys for the LLM provider.
-            system_prompt (str): System prompt loaded from an external file.
-            model (str, optional): LLM model to use. Defaults to "openai".
-            verbose (bool, optional): Enable detailed logging. Defaults to False.
-            max_tokens (int, optional): Maximum number of tokens per API request. Defaults to 2048.
-            concurrency (int, optional): Number of concurrent threads for processing. Defaults to 5.
-        """
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         self.api_keys = api_keys if api_keys else []
         if not self.api_keys:
-            raise ValueError("At least one API key is required for content rewriting.")
+            raise ValueError("Au moins une clé API est requise pour la réécriture du contenu.")
         self.api_keys_cycle = cycle(self.api_keys)
         self.lock = threading.Lock()
         
         self.model = model.lower()
         self.verbose = verbose
-        self.max_tokens = max_tokens  # Token limit per request
-        self.concurrency = concurrency  # Number of concurrent threads
+        self.max_tokens = max_tokens
+        self.concurrency = concurrency
         
-        # Store the system prompt
         self.system_prompt = system_prompt
         
-        # Configure logging with Rich
         logging.basicConfig(
             level=logging.INFO if not verbose else logging.DEBUG,
             format='%(message)s',
@@ -126,12 +81,6 @@ class ContentRewriter:
         self.console = Console()
 
     def get_next_api_key(self) -> Optional[str]:
-        """
-        Retrieves the next available API key from the cyclic list.
-
-        Returns:
-            Optional[str]: The next API key or None if unavailable.
-        """
         with self.lock:
             try:
                 return next(self.api_keys_cycle)
@@ -139,15 +88,6 @@ class ContentRewriter:
                 return None
 
     def split_text_into_chunks(self, text: str) -> List[str]:
-        """
-        Splits the text into manageable chunks based on the token limit.
-
-        Args:
-            text (str): The text to split.
-
-        Returns:
-            List[str]: List of text chunks.
-        """
         avg_chars_per_token = 4
         max_chars = self.max_tokens * avg_chars_per_token
         paragraphs = text.split('\n\n')
@@ -165,28 +105,17 @@ class ContentRewriter:
         if current_chunk:
             chunks.append(current_chunk.strip())
         
-        self.logger.debug(f"Text split into {len(chunks)} chunks.")
+        self.logger.debug(f"Texte divisé en {len(chunks)} morceaux.")
         return chunks
 
     def rewrite_chunk(self, chunk: str, document_name: str, file_name: str) -> Optional[str]:
-        """
-        Rewrites a chunk of text using the specified LLM provider.
-
-        Args:
-            chunk (str): The text chunk to rewrite.
-            document_name (str): Name of the source document.
-            file_name (str): Name of the source file.
-
-        Returns:
-            Optional[str]: The rewritten text or None in case of an error.
-        """
         system_prompt = self.system_prompt
         user_content = chunk
 
         api_key = self.get_next_api_key()
         if not api_key:
-            self.logger.error("No API key available for rewriting.")
-            self._update_metrics('errors', "No API key available for rewriting.")
+            self.logger.error("Aucune clé API disponible pour la réécriture.")
+            self._update_metrics('errors', "Aucune clé API disponible pour la réécriture.")
             return None
 
         if self.model == "openai":
@@ -196,7 +125,7 @@ class ContentRewriter:
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "gpt-4",
+                "model": "gpt-4o-mini",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content}
@@ -237,23 +166,23 @@ class ContentRewriter:
                 "stream": False
             }
         else:
-            self.logger.error(f"Unknown LLM provider: {self.model}")
-            self._update_metrics('errors', f"Unknown LLM provider: {self.model}")
+            self.logger.error(f"Fournisseur LLM inconnu : {self.model}")
+            self._update_metrics('errors', f"Fournisseur LLM inconnu : {self.model}")
             return None
 
         if self.verbose:
-            self.logger.debug(f"Calling LLM {self.model} for {document_name}: Payload size {len(user_content)}")
+            self.logger.debug(f"Appel du LLM {self.model} pour {document_name} : Taille du payload {len(user_content)}")
 
         try:
             response = requests.post(endpoint, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
         except requests.HTTPError as e:
-            self.logger.error(f"LLM API error {self.model}: {str(e)}, response: {response.text}")
-            self._update_metrics('errors', f"LLM API error {self.model}: {str(e)}, response: {response.text}")
+            self.logger.error(f"Erreur API LLM {self.model} : {str(e)}, réponse : {response.text}")
+            self._update_metrics('errors', f"Erreur API LLM {self.model} : {str(e)}, réponse : {response.text}")
             return None
         except Exception as e:
-            self.logger.error(f"Error calling LLM {self.model}: {str(e)}")
-            self._update_metrics('errors', f"Error calling LLM {self.model}: {str(e)}")
+            self.logger.error(f"Erreur lors de l'appel au LLM {self.model} : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors de l'appel au LLM {self.model} : {str(e)}")
             return None
 
         response_json = response.json()
@@ -269,29 +198,20 @@ class ContentRewriter:
         return rewritten_text
 
     def rewrite_file(self, file_path: Path) -> bool:
-        """
-        Rewrites the content of a file using the ContentRewriter.
-
-        Args:
-            file_path (Path): Path to the file to rewrite.
-
-        Returns:
-            bool: True if rewriting was successful, False otherwise.
-        """
         document_name = file_path.stem
-        self.logger.info(f"Rewriting content of {file_path.name}")
+        self.logger.info(f"Réécriture du contenu de {file_path.name}")
 
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
         except Exception as e:
-            self.logger.error(f"Error reading {file_path.name}: {str(e)}")
-            self._update_metrics('errors', f"Error reading {file_path.name}: {str(e)}")
+            self.logger.error(f"Erreur lors de la lecture de {file_path.name} : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors de la lecture de {file_path.name} : {str(e)}")
             return False
 
         if not text.strip():
-            self.logger.warning(f"No text to rewrite in {file_path.name}")
-            self._update_metrics('errors', f"No text to rewrite in {file_path.name}")
+            self.logger.warning(f"Aucun texte à réécrire dans {file_path.name}")
+            self._update_metrics('errors', f"Aucun texte à réécrire dans {file_path.name}")
             return False
 
         chunks = self.split_text_into_chunks(text)
@@ -307,7 +227,7 @@ class ContentRewriter:
             transient=True,
             console=self.console
         ) as progress:
-            task = progress.add_task(f"Rewriting {file_path.name}", total=total_chunks)
+            task = progress.add_task(f"Réécriture de {file_path.name}", total=total_chunks)
 
             def process_chunk(index, chunk):
                 rewritten = self.rewrite_chunk(chunk, document_name, file_path.name)
@@ -321,11 +241,11 @@ class ContentRewriter:
                     try:
                         future.result()
                     except Exception as e:
-                        self.logger.error(f"Error rewriting segment {idx + 1}: {str(e)}")
-                        self._update_metrics('errors', f"Error rewriting segment {idx + 1}: {str(e)}")
+                        self.logger.error(f"Erreur lors de la réécriture du segment {idx + 1} : {str(e)}")
+                        self._update_metrics('errors', f"Erreur lors de la réécriture du segment {idx + 1} : {str(e)}")
 
         if any(chunk is None for chunk in rewritten_chunks):
-            self.logger.warning(f"Partial rewrite failed for {file_path.name}")
+            self.logger.warning(f"Réécriture partielle échouée pour {file_path.name}")
             return False
 
         rewritten_text = "\n\n".join(rewritten_chunks)
@@ -333,24 +253,21 @@ class ContentRewriter:
         try:
             with open(output_file_name, 'w', encoding='utf-8') as f:
                 f.write(rewritten_text)
-            self.logger.info(f"Rewritten file created: {output_file_name}")
+            self.logger.info(f"Fichier réécrit créé : {output_file_name}")
             self._update_metrics('pages_rewritten', 1)
             return True
         except Exception as e:
-            self.logger.error(f"Error saving {file_path}: {str(e)}")
-            self._update_metrics('errors', f"Error saving {file_path}: {str(e)}")
+            self.logger.error(f"Erreur lors de la sauvegarde de {file_path} : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors de la sauvegarde de {file_path} : {str(e)}")
             return False
 
     def rewrite_all_contents(self):
-        """
-        Rewrites the content of all files in the input directory.
-        """
         txt_files = list(self.input_dir.glob('*.txt'))
         total_files = len(txt_files)
-        self.logger.info(f"Starting to rewrite {total_files} file(s)")
+        self.logger.info(f"Démarrage de la réécriture de {total_files} fichier(s)")
 
         if total_files == 0:
-            self.logger.info("No files to rewrite.")
+            self.logger.info("Aucun fichier à réécrire.")
             return
 
         with Progress(
@@ -359,10 +276,9 @@ class ContentRewriter:
             BarColumn(),
             "[progress.percentage]{task.percentage:>3.0f}%",
             TimeRemainingColumn(),
-            transient=True,
             console=self.console
         ) as progress:
-            task = progress.add_task("Rewriting files", total=total_files)
+            task = progress.add_task("Réécriture des fichiers", total=total_files)
 
             with ThreadPoolExecutor(max_workers=self.concurrency) as executor:
                 futures = {executor.submit(self.rewrite_file, txt_file_path): txt_file_path for txt_file_path in txt_files}
@@ -372,22 +288,15 @@ class ContentRewriter:
                     try:
                         result = future.result()
                         if result:
-                            self.logger.info(f"Successfully rewritten {txt_file_path.name}")
+                            self.logger.info(f"Réécriture réussie pour {txt_file_path.name}")
                         progress.advance(task)
                     except Exception as e:
-                        self.logger.error(f"Error rewriting {txt_file_path.name}: {str(e)}")
-                        self._update_metrics('errors', f"Error rewriting {txt_file_path.name}: {str(e)}")
+                        self.logger.error(f"Erreur lors de la réécriture de {txt_file_path.name} : {str(e)}")
+                        self._update_metrics('errors', f"Erreur lors de la réécriture de {txt_file_path.name} : {str(e)}")
                         progress.advance(task)
-        self.logger.info("Content rewriting completed.")
+        self.logger.info("Réécriture du contenu terminée.")
 
     def _update_metrics(self, key: str, value):
-        """
-        Updates global metrics in a thread-safe manner.
-
-        Args:
-            key (str): The metric key to update.
-            value: The value to add or increment.
-        """
         with metrics_lock:
             if key == 'errors':
                 metrics['errors'].append(value)
@@ -400,15 +309,6 @@ class ContentRewriter:
 
 
 class DownloadConfig(BaseModel):
-    """
-    Configuration for the types of files to download.
-
-    Attributes:
-        pdf (bool): Download PDF files.
-        doc (bool): Download Word, Excel, etc., documents.
-        image (bool): Download images.
-        other (bool): Download other types of files.
-    """
     pdf: bool = False
     doc: bool = False
     image: bool = False
@@ -416,22 +316,6 @@ class DownloadConfig(BaseModel):
 
 
 class OutputConfig(BaseModel):
-    """
-    Configuration for output directories.
-
-    Attributes:
-        crawler_output_dir (str): Main output directory for the crawler.
-        checkpoint_file (str): Checkpoint file for resuming.
-        logs_dir (str): Directory for logs.
-        content_dir (str): Directory for extracted content.
-        content_rewritten_dir (str): Directory for rewritten content.
-        PDF (str): Directory for downloaded PDF files.
-        Image (str): Directory for downloaded images.
-        Doc (str): Directory for downloaded documents.
-        Archive (str): Directory for downloaded archives.
-        Audio (str): Directory for downloaded audio files.
-        Video (str): Directory for downloaded video files.
-    """
     crawler_output_dir: str
     checkpoint_file: str
     logs_dir: str
@@ -446,32 +330,12 @@ class OutputConfig(BaseModel):
 
 
 class LimitsConfig(BaseModel):
-    """
-    Configuration for the crawler's operational limits.
-
-    Attributes:
-        max_tokens (int): Maximum number of tokens per API request.
-        concurrency (int): Number of concurrent threads for processing.
-        max_urls (Optional[int]): Maximum number of URLs to crawl.
-    """
     max_tokens: int = 2048
     concurrency: int = 5
     max_urls: Optional[int] = None
 
 
 class CrawlerConfig(BaseModel):
-    """
-    General configuration for the crawler.
-
-    Attributes:
-        start_url (str): Starting URL for crawling.
-        max_depth (int): Maximum crawling depth.
-        use_playwright (bool): Use Playwright for page rendering.
-        download (DownloadConfig): Configuration for types of files to download.
-        output (OutputConfig): Configuration for output directories.
-        limits (LimitsConfig): Configuration for operational limits.
-        verbose (bool): Enable detailed logging.
-    """
     start_url: str
     max_depth: int = 2
     use_playwright: bool = False
@@ -482,16 +346,6 @@ class CrawlerConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """
-    Configuration for the LLM provider.
-
-    Attributes:
-        provider (str): LLM provider to use (e.g., "openai", "anthropic", "mistral").
-        api_keys (List[str]): List of API keys for the LLM provider.
-        max_tokens (int): Maximum number of tokens per API request.
-        concurrency (int): Number of concurrent threads for processing.
-        system_prompt_file (str): Path to the file containing the system prompt.
-    """
     provider: str = "openai"
     api_keys: List[str]
     max_tokens: int = 2048
@@ -500,65 +354,19 @@ class LLMConfig(BaseModel):
 
 
 class Config(BaseModel):
-    """
-    Complete configuration for the crawler and content rewriter.
-
-    Attributes:
-        crawler (CrawlerConfig): Configuration for the crawler.
-        llm (LLMConfig): Configuration for the LLM provider.
-    """
     crawler: CrawlerConfig
     llm: LLMConfig
 
 
 class WebCrawler:
-    """
-    Class representing the web crawler responsible for extracting URLs, downloading files,
-    extracting content, and rewriting content using an LLM.
-
-    Methods:
-        __init__: Initializes the crawler with the given configuration.
-        setup_session: Configures the HTTP session with retry strategies.
-        create_directories: Creates necessary directories for the crawler to operate.
-        should_exclude: Determines if a URL should be excluded from crawling.
-        is_same_language: Checks if a URL matches the specified language pattern.
-        is_downloadable_file: Determines if a URL points to a downloadable file.
-        head_or_get: Performs a HEAD or GET request to obtain headers or content.
-        get_file_type_and_extension: Determines the file type and its extension based on URL and headers.
-        sanitize_filename: Generates a secure filename from a URL.
-        download_file: Downloads a file from a URL.
-        fetch_page_content: Retrieves the HTML content of a web page.
-        convert_links_to_absolute: Converts relative links to absolute links in HTML content.
-        clean_text: Cleans text by removing unwanted characters.
-        extract_urls: Extracts URLs starting from the initial URL up to a maximum depth.
-        extract_content: Extracts the main content from a page and saves it.
-        load_downloaded_files: Loads the history of downloaded files.
-        save_downloaded_files: Saves the history of downloaded files.
-        generate_report: Generates a JSON report of the operations performed.
-        generate_xml_sitemap: Generates an XML sitemap of the crawled URLs.
-        save_checkpoint: Saves the current state of the crawler for later resumption.
-        load_checkpoint: Loads a previous state of the crawler to resume crawling.
-        crawl: Starts the crawling process.
-        stop_crawl: Stops the crawling process.
-        _update_metrics: Updates global metrics in a thread-safe manner.
-    """
-
     def __init__(self, config: dict):
-        """
-        Initializes the WebCrawler with the given configuration.
-
-        Args:
-            config (dict): Configuration dictionary.
-        """
-        # Load configuration with Pydantic
         try:
             self.config = CrawlerConfig.parse_obj(config['crawler'])
             self.llm_config = LLMConfig.parse_obj(config['llm'])
         except ValidationError as e:
-            print("Configuration validation error:", e)
+            print("Erreur de validation de la configuration :", e)
             raise
 
-        # Extract configurations
         crawler_conf = self.config
         llm_conf = self.llm_config
 
@@ -585,7 +393,6 @@ class WebCrawler:
 
         self.excluded_paths = ['selecteur-de-produits']
 
-        # Configure logging with Rich
         (self.base_dir / crawler_conf.output.logs_dir).mkdir(parents=True, exist_ok=True)
         logging.basicConfig(
             level=logging.DEBUG if crawler_conf.verbose else logging.INFO,
@@ -652,14 +459,11 @@ class WebCrawler:
         self.html_converter.ignore_images = True
         self.html_converter.single_line_break = False
 
-        # Extract language pattern from the starting URL (optional)
         self.language_path = re.search(r'/(fr|en)-(ca|us)/', self.start_url)
         self.language_pattern = self.language_path.group(0) if self.language_path else None
 
-        # Create necessary directories
         self.create_directories()
 
-        # Initialize Playwright if enabled
         self.playwright = None
         self.browser = None
         self.page = None
@@ -669,35 +473,33 @@ class WebCrawler:
                 self.playwright = sync_playwright().start()
                 self.browser = self.playwright.chromium.launch(headless=True)
                 self.page = self.browser.new_page()
-                self.logger.info("Playwright initialized successfully.")
+                self.logger.info("Playwright initialisé avec succès.")
             except Exception as e:
-                self.logger.error(f"Failed to initialize Playwright: {str(e)}")
-                self._update_metrics('errors', f"Failed to initialize Playwright: {str(e)}")
-                self.use_playwright = False  # Disable Playwright if initialization fails
+                self.logger.error(f"Échec de l'initialisation de Playwright : {str(e)}")
+                self._update_metrics('errors', f"Échec de l'initialisation de Playwright : {str(e)}")
+                self.use_playwright = False
 
         self.stop_event = threading.Event()
 
-        # Load the system prompt from the specified file
         system_prompt_file = llm_conf.system_prompt_file
         if system_prompt_file:
             try:
                 with open(system_prompt_file, 'r', encoding='utf-8') as f:
                     system_prompt = f.read().strip()
-                self.logger.info(f"System prompt loaded from {system_prompt_file}")
+                self.logger.info(f"Prompt système chargé depuis {system_prompt_file}")
             except Exception as e:
-                self.logger.error(f"Error loading prompt file {system_prompt_file}: {str(e)}")
-                self._update_metrics('errors', f"Error loading prompt file {system_prompt_file}: {str(e)}")
+                self.logger.error(f"Erreur lors du chargement du fichier prompt {system_prompt_file} : {str(e)}")
+                self._update_metrics('errors', f"Erreur lors du chargement du fichier prompt {system_prompt_file} : {str(e)}")
                 system_prompt = (
                     "You are an expert content rewriter. Reformulate the text below to improve its clarity and readability while preserving the original meaning."
                 )
-                self.logger.info("Using default system prompt.")
+                self.logger.info("Utilisation du prompt système par défaut.")
         else:
             system_prompt = (
                 "You are an expert content rewriter. Reformulate the text below to improve its clarity and readability while preserving the original meaning."
             )
-            self.logger.info("No prompt file specified, using default system prompt.")
+            self.logger.info("Aucun fichier prompt spécifié, utilisation du prompt système par défaut.")
 
-        # Instantiate the ContentRewriter
         rewriter_output_dir = crawler_conf.output.content_rewritten_dir
         self.content_rewriter = ContentRewriter(
             input_dir=str(self.base_dir / crawler_conf.output.content_dir),
@@ -711,12 +513,6 @@ class WebCrawler:
         )
 
     def setup_session(self) -> requests.Session:
-        """
-        Configures the HTTP session with retry strategies.
-
-        Returns:
-            requests.Session: The configured HTTP session.
-        """
         session = requests.Session()
         retry_strategy = requests.adapters.Retry(
             total=5,
@@ -727,7 +523,7 @@ class WebCrawler:
         adapter = requests.adapters.HTTPAdapter(max_retries=retry_strategy)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
-        session.verify = True  # Enable SSL verification
+        session.verify = True
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
                           'Chrome/85.0.4183.102 Safari/537.36'
@@ -735,9 +531,6 @@ class WebCrawler:
         return session
 
     def create_directories(self):
-        """
-        Creates the necessary directories for the crawler to operate.
-        """
         directories = [
             self.config.output.content_dir,
             self.config.output.PDF,
@@ -752,44 +545,17 @@ class WebCrawler:
         for dir_path in directories:
             full_path = self.base_dir / dir_path
             full_path.mkdir(parents=True, exist_ok=True)
-            self.logger.debug(f"Directory created or already exists: {full_path}")
+            self.logger.debug(f"Répertoire créé ou déjà existant : {full_path}")
 
     def should_exclude(self, url: str) -> bool:
-        """
-        Determines if a URL should be excluded from crawling.
-
-        Args:
-            url (str): The URL to evaluate.
-
-        Returns:
-            bool: True if the URL should be excluded, False otherwise.
-        """
         return any(excluded in url for excluded in self.excluded_paths)
 
     def is_same_language(self, url: str) -> bool:
-        """
-        Checks if a URL matches the specified language pattern.
-
-        Args:
-            url (str): The URL to evaluate.
-
-        Returns:
-            bool: True if the URL matches the language pattern, False otherwise.
-        """
         if not self.language_pattern:
             return True
         return self.language_pattern in url
 
     def is_downloadable_file(self, url: str) -> bool:
-        """
-        Determines if a URL points to a downloadable file.
-
-        Args:
-            url (str): The URL to evaluate.
-
-        Returns:
-            bool: True if it's a downloadable file, False otherwise.
-        """
         path = urlparse(url).path.lower()
         if not self.all_downloadable_exts:
             return False
@@ -797,18 +563,9 @@ class WebCrawler:
         return bool(pattern.search(path))
 
     def head_or_get(self, url: str) -> Optional[requests.Response]:
-        """
-        Performs a HEAD or GET request to obtain headers or content of a URL.
-
-        Args:
-            url (str): The URL to request.
-
-        Returns:
-            Optional[requests.Response]: The HTTP response or None on failure.
-        """
         try:
             r = self.session.head(url, allow_redirects=True, timeout=10)
-            if r.status_code == 405:  # Method not allowed, try GET
+            if r.status_code == 405:
                 r = self.session.get(url, allow_redirects=True, timeout=10, stream=True)
             return r
         except:
@@ -818,16 +575,6 @@ class WebCrawler:
                 return None
 
     def get_file_type_and_extension(self, url: str, response: requests.Response) -> (Optional[str], Optional[str]):
-        """
-        Determines the file type and its extension based on the URL and response headers.
-
-        Args:
-            url (str): The URL of the file.
-            response (requests.Response): The associated HTTP response.
-
-        Returns:
-            tuple(Optional[str], Optional[str]): The file type and its extension.
-        """
         if response is None:
             return None, None
         path = urlparse(url).path.lower()
@@ -846,16 +593,6 @@ class WebCrawler:
         return None, None
 
     def sanitize_filename(self, url: str, extension: str) -> str:
-        """
-        Generates a secure filename from a URL.
-
-        Args:
-            url (str): The original URL.
-            extension (str): The file extension.
-
-        Returns:
-            str: The sanitized filename.
-        """
         url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
         filename = url.split('/')[-1] or 'index'
         filename = re.sub(r'[^\w\-_.]', '_', filename)
@@ -866,40 +603,31 @@ class WebCrawler:
         return sanitized
 
     def download_file(self, url: str) -> bool:
-        """
-        Downloads a file from a URL.
-
-        Args:
-            url (str): The URL of the file to download.
-
-        Returns:
-            bool: True if the download was successful, False otherwise.
-        """
         if self.stop_event.is_set():
             return False
 
         response = self.head_or_get(url)
         if not response or response.status_code != 200:
-            self.logger.warning(f"Failed to retrieve file from {url}")
-            self._update_metrics('errors', f"Failed to retrieve file from {url}")
+            self.logger.warning(f"Échec de la récupération du fichier à {url}")
+            self._update_metrics('errors', f"Échec de la récupération du fichier à {url}")
             return False
 
         file_type_detected, extension = self.get_file_type_and_extension(url, response)
         if not file_type_detected:
-            self.logger.warning(f"Unable to determine file type for: {url}")
-            self._update_metrics('errors', f"Unable to determine file type for: {url}")
+            self.logger.warning(f"Impossible de déterminer le type de fichier pour : {url}")
+            self._update_metrics('errors', f"Impossible de déterminer le type de fichier pour : {url}")
             return False
 
         if file_type_detected not in self.downloadable_extensions:
-            self.logger.info(f"File type {file_type_detected} not enabled for download.")
+            self.logger.info(f"Type de fichier {file_type_detected} non activé pour le téléchargement.")
             return False
 
-        self.logger.info(f"Attempting to download {file_type_detected} from: {url}")
+        self.logger.info(f"Tentative de téléchargement du fichier {file_type_detected} depuis : {url}")
         filename = self.sanitize_filename(url, extension)
         save_path = self.base_dir / file_type_detected / filename
 
         if save_path.exists():
-            self.logger.info(f"File already downloaded, skipping: {filename}")
+            self.logger.info(f"Fichier déjà téléchargé, passage : {filename}")
             return False
 
         try:
@@ -909,39 +637,30 @@ class WebCrawler:
             with open(save_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if self.stop_event.is_set():
-                        self.logger.info(f"Download stopped for: {url}")
+                        self.logger.info(f"Téléchargement arrêté pour : {url}")
                         return False
                     if chunk:
                         f.write(chunk)
 
             self.stats[f'{file_type_detected}_downloaded'] += 1
             self.downloaded_files.add(url)
-            self.logger.info(f"Successfully downloaded {file_type_detected}: {filename}")
+            self.logger.info(f"Téléchargement réussi de {file_type_detected} : {filename}")
             self._update_metrics('files_downloaded', file_type_detected)
             return True
         except Exception as e:
-            self.logger.error(f"Error downloading {url}: {str(e)}")
-            self._update_metrics('errors', f"Error downloading {url}: {str(e)}")
+            self.logger.error(f"Erreur lors du téléchargement de {url} : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors du téléchargement de {url} : {str(e)}")
             return False
 
     def fetch_page_content(self, url: str) -> Optional[str]:
-        """
-        Retrieves the HTML content of a web page.
-
-        Args:
-            url (str): The URL of the page to retrieve.
-
-        Returns:
-            Optional[str]: The HTML content of the page or None on failure.
-        """
         if self.use_playwright and self.page:
             try:
                 self.page.goto(url, timeout=20000)
                 time.sleep(2)
                 return self.page.content()
             except Exception as e:
-                self.logger.error(f"Playwright failed to retrieve {url}: {str(e)}")
-                self._update_metrics('errors', f"Playwright failed to retrieve {url}: {str(e)}")
+                self.logger.error(f"Playwright a échoué à récupérer {url} : {str(e)}")
+                self._update_metrics('errors', f"Playwright a échoué à récupérer {url} : {str(e)}")
                 return None
         else:
             try:
@@ -949,25 +668,15 @@ class WebCrawler:
                 if response.status_code == 200:
                     return response.text
                 else:
-                    self.logger.warning(f"Failed to retrieve {url}, status code: {response.status_code}")
-                    self._update_metrics('errors', f"Failed to retrieve {url}, status code: {response.status_code}")
+                    self.logger.warning(f"Échec de la récupération de {url}, code de statut : {response.status_code}")
+                    self._update_metrics('errors', f"Échec de la récupération de {url}, code de statut : {response.status_code}")
                     return None
             except Exception as e:
-                self.logger.error(f"Requests failed to retrieve {url}: {str(e)}")
-                self._update_metrics('errors', f"Requests failed to retrieve {url}: {str(e)}")
+                self.logger.error(f"Requests a échoué à récupérer {url} : {str(e)}")
+                self._update_metrics('errors', f"Requests a échoué à récupérer {url} : {str(e)}")
                 return None
 
     def convert_links_to_absolute(self, soup: BeautifulSoup, base_url: str) -> BeautifulSoup:
-        """
-        Converts relative links to absolute links in the HTML content.
-
-        Args:
-            soup (BeautifulSoup): The BeautifulSoup object containing the HTML content.
-            base_url (str): The base URL to convert relative links.
-
-        Returns:
-            BeautifulSoup: The updated BeautifulSoup object with absolute links.
-        """
         for tag in soup.find_all(['a', 'embed', 'iframe', 'object'], href=True):
             attr = 'href' if tag.name == 'a' else 'src'
             href = tag.get(attr)
@@ -977,15 +686,6 @@ class WebCrawler:
         return soup
 
     def clean_text(self, text: str) -> str:
-        """
-        Cleans text by removing unwanted characters.
-
-        Args:
-            text (str): The text to clean.
-
-        Returns:
-            str: The cleaned text.
-        """
         if not text:
             return ""
         text = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', text)
@@ -994,12 +694,6 @@ class WebCrawler:
         return text.strip()
 
     def extract_urls(self, start_url: str):
-        """
-        Extracts URLs starting from the initial URL up to a maximum depth.
-
-        Args:
-            start_url (str): The starting URL for crawling.
-        """
         queue = deque([(start_url, 0)])
         self.visited_pages.add(start_url)
         crawled_count = 0
@@ -1013,28 +707,28 @@ class WebCrawler:
             TimeRemainingColumn(),
             console=self.console
         ) as progress:
-            task = progress.add_task("Extracting URLs", total=total_estimated)
+            task = progress.add_task("Extraction des URLs", total=total_estimated)
 
             while queue:
                 if self.stop_event.is_set():
-                    self.logger.info("Crawling stopped by user.")
+                    self.logger.info("Exploration arrêtée par l'utilisateur.")
                     break
 
                 current_url, depth = queue.popleft()
 
                 if self.max_urls is not None and crawled_count >= self.max_urls:
-                    self.logger.info(f"Max URLs limit reached ({self.max_urls}), stopping URL extraction.")
+                    self.logger.info(f"Limite max_urls atteinte ({self.max_urls}), arrêt de l'extraction des URLs.")
                     break
 
                 if self.max_urls is None and depth > self.max_depth:
                     continue
 
                 if self.should_exclude(current_url):
-                    self.logger.info(f"Excluded URL: {current_url}")
+                    self.logger.info(f"URL exclue : {current_url}")
                     progress.advance(task)
                     continue
 
-                self.logger.info(f"Extracting URLs from: {current_url} (depth: {depth})")
+                self.logger.info(f"Extraction des URLs de : {current_url} (profondeur : {depth})")
                 crawled_count += 1
                 progress.advance(task)
 
@@ -1046,7 +740,7 @@ class WebCrawler:
 
                 page_content = self.fetch_page_content(current_url)
                 if page_content is None:
-                    self.logger.warning(f"Unable to retrieve content from: {current_url}")
+                    self.logger.warning(f"Impossible de récupérer le contenu de : {current_url}")
                     continue
 
                 soup = BeautifulSoup(page_content, 'html.parser')
@@ -1078,22 +772,16 @@ class WebCrawler:
                 self.stats['urls_found'] += len(child_links)
                 self._update_metrics('urls_extracted', len(child_links))
 
-        self.logger.info("URL extraction completed.")
+        self.logger.info("Extraction des URLs terminée.")
 
     def extract_content(self, url: str):
-        """
-        Extracts the main content from a page and saves it.
-
-        Args:
-            url (str): The URL of the page to process.
-        """
         if self.is_downloadable_file(url):
-            self.logger.debug(f"Skipping content extraction for downloadable file: {url}")
+            self.logger.debug(f"Passage de l'extraction du contenu pour le fichier téléchargeable : {url}")
             return
 
         page_content = self.fetch_page_content(url)
         if page_content is None:
-            self.logger.warning(f"Unable to retrieve content for: {url}")
+            self.logger.warning(f"Impossible de récupérer le contenu pour : {url}")
             return
 
         soup = BeautifulSoup(page_content, 'html.parser')
@@ -1105,7 +793,7 @@ class WebCrawler:
                         soup.find('section', class_='main-section'))
 
         if not main_content:
-            self.logger.warning(f"No main content found for: {url}")
+            self.logger.warning(f"Aucun contenu principal trouvé pour : {url}")
             return
 
         self.convert_links_to_absolute(main_content, url)
@@ -1115,7 +803,7 @@ class WebCrawler:
         content_parts = []
         if title:
             content_parts.append(f"# {title.get_text().strip()}")
-        content_parts.append(f"**Source:** {url}")
+        content_parts.append(f"**Source :** {url}")
         content_parts.append(markdown_content)
 
         content = self.clean_text('\n\n'.join(content_parts))
@@ -1129,18 +817,17 @@ class WebCrawler:
                 self.stats['pages_processed'] += 1
                 self._update_metrics('pages_extracted', 1)
 
-                # Call the ContentRewriter immediately
                 rewrite_success = self.content_rewriter.rewrite_file(save_path)
                 if rewrite_success:
-                    self.logger.info(f"Successfully rewritten content for {filename}")
+                    self.logger.info(f"Réécriture du contenu réussie pour {filename}")
                 else:
-                    self.logger.warning(f"Failed to rewrite content for {filename}")
+                    self.logger.warning(f"Réécriture du contenu échouée pour {filename}")
 
             except Exception as e:
-                self.logger.error(f"Error saving content for {url}: {str(e)}")
-                self._update_metrics('errors', f"Error saving content for {url}: {str(e)}")
+                self.logger.error(f"Erreur lors de la sauvegarde du contenu pour {url} : {str(e)}")
+                self._update_metrics('errors', f"Erreur lors de la sauvegarde du contenu pour {url} : {str(e)}")
         else:
-            self.logger.warning(f"No significant content found for: {url}")
+            self.logger.warning(f"Aucun contenu significatif trouvé pour : {url}")
 
         for tag in main_content.find_all(['a', 'embed', 'iframe', 'object'], href=True):
             href = tag.get('href') or tag.get('src')
@@ -1150,44 +837,31 @@ class WebCrawler:
                     self.download_file(file_url)
 
     def load_downloaded_files(self):
-        """
-        Loads the history of downloaded files from a tracking file.
-        """
         downloaded_files_path = self.base_dir / self.config.output.logs_dir / 'downloaded_files.txt'
         if downloaded_files_path.exists():
             try:
                 with open(downloaded_files_path, 'r', encoding='utf-8') as f:
                     for line in f:
                         self.downloaded_files.add(line.strip())
-                self.logger.info(f"Loaded {len(self.downloaded_files)} downloaded files.")
+                self.logger.info(f"{len(self.downloaded_files)} fichiers téléchargés chargés.")
             except Exception as e:
-                self.logger.error(f"Error loading downloaded files tracking: {str(e)}")
-                self._update_metrics('errors', f"Error loading downloaded files tracking: {str(e)}")
+                self.logger.error(f"Erreur lors du chargement du suivi des fichiers téléchargés : {str(e)}")
+                self._update_metrics('errors', f"Erreur lors du chargement du suivi des fichiers téléchargés : {str(e)}")
         else:
-            self.logger.info("No downloaded files tracking found, starting without history.")
+            self.logger.info("Aucun fichier de suivi des téléchargements trouvé, démarrage sans historique.")
 
     def save_downloaded_files(self):
-        """
-        Saves the history of downloaded files to a tracking file.
-        """
         downloaded_files_path = self.base_dir / self.config.output.logs_dir / 'downloaded_files.txt'
         try:
             with open(downloaded_files_path, 'w', encoding='utf-8') as f:
                 for url in sorted(self.downloaded_files):
                     f.write(url + '\n')
-            self.logger.info(f"Saved {len(self.downloaded_files)} downloaded files.")
+            self.logger.info(f"{len(self.downloaded_files)} fichiers téléchargés sauvegardés.")
         except Exception as e:
-            self.logger.error(f"Error saving downloaded files tracking: {str(e)}")
-            self._update_metrics('errors', f"Error saving downloaded files tracking: {str(e)}")
+            self.logger.error(f"Erreur lors de la sauvegarde du suivi des fichiers téléchargés : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors de la sauvegarde du suivi des fichiers téléchargés : {str(e)}")
 
     def generate_report(self, duration: float, error: Optional[str] = None):
-        """
-        Generates a JSON report of the operations performed.
-
-        Args:
-            duration (float): Total execution time in seconds.
-            error (Optional[str], optional): Description of any critical error if present. Defaults to None.
-        """
         report_data = {
             "configuration": {
                 "start_url": self.start_url,
@@ -1202,7 +876,7 @@ class WebCrawler:
                 "files_downloaded": {k: self.stats.get(f"{k}_downloaded", 0) for k in self.downloadable_extensions.keys()},
                 "total_files_downloaded": sum(self.stats.get(f"{k}_downloaded", 0) for k in self.downloadable_extensions.keys())
             },
-            "status": "Completed with errors" if error else "Completed successfully",
+            "status": "Terminé avec des erreurs" if error else "Terminé avec succès",
             "visited_pages": sorted(self.visited_pages),
             "downloaded_files": sorted(self.downloaded_files),
             "errors": metrics['errors'] if metrics['errors'] else None
@@ -1212,15 +886,12 @@ class WebCrawler:
         try:
             with open(json_report_path, 'w', encoding='utf-8') as f:
                 json.dump(report_data, f, indent=4, ensure_ascii=False)
-            self.logger.info(f"JSON report generated successfully: {json_report_path}")
+            self.logger.info(f"Rapport JSON généré avec succès : {json_report_path}")
         except Exception as e:
-            self.logger.error(f"Error generating JSON report: {str(e)}")
-            self._update_metrics('errors', f"Error generating JSON report: {str(e)}")
+            self.logger.error(f"Erreur lors de la génération du rapport JSON : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors de la génération du rapport JSON : {str(e)}")
 
     def generate_xml_sitemap(self):
-        """
-        Generates an XML sitemap of the crawled URLs.
-        """
         visited = set()
 
         def add_page_element(parent_elem, url):
@@ -1238,15 +909,12 @@ class WebCrawler:
         xml_path = self.base_dir / 'sitemap.xml'
         try:
             tree.write(xml_path, encoding='utf-8', xml_declaration=True)
-            self.logger.info(f"XML sitemap generated successfully: {xml_path}")
+            self.logger.info(f"Sitemap XML générée avec succès : {xml_path}")
         except Exception as e:
-            self.logger.error(f"Error generating XML sitemap: {str(e)}")
-            self._update_metrics('errors', f"Error generating XML sitemap: {str(e)}")
+            self.logger.error(f"Erreur lors de la génération de la sitemap XML : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors de la génération de la sitemap XML : {str(e)}")
 
     def save_checkpoint(self):
-        """
-        Saves the current state of the crawler for later resumption.
-        """
         checkpoint_data = {
             "visited_pages": list(self.visited_pages),
             "downloaded_files": list(self.downloaded_files),
@@ -1256,15 +924,12 @@ class WebCrawler:
         try:
             with open(self.checkpoint_file, 'w', encoding='utf-8') as f:
                 json.dump(checkpoint_data, f, ensure_ascii=False, indent=4)
-            self.logger.info(f"Checkpoint saved: {self.checkpoint_file}")
+            self.logger.info(f"Checkpoint sauvegardé : {self.checkpoint_file}")
         except Exception as e:
-            self.logger.error(f"Error saving checkpoint: {str(e)}")
-            self._update_metrics('errors', f"Error saving checkpoint: {str(e)}")
+            self.logger.error(f"Erreur lors de la sauvegarde du checkpoint : {str(e)}")
+            self._update_metrics('errors', f"Erreur lors de la sauvegarde du checkpoint : {str(e)}")
 
     def load_checkpoint(self):
-        """
-        Loads a previous state of the crawler to resume crawling.
-        """
         if self.checkpoint_file.exists():
             try:
                 with open(self.checkpoint_file, 'r', encoding='utf-8') as f:
@@ -1273,40 +938,30 @@ class WebCrawler:
                 self.downloaded_files = set(checkpoint_data.get("downloaded_files", []))
                 self.site_map = {k: set(v) for k, v in checkpoint_data.get("site_map", {}).items()}
                 self.stats = defaultdict(int, checkpoint_data.get("stats", {}))
-                self.logger.info(f"Checkpoint loaded: {self.checkpoint_file}")
+                self.logger.info(f"Checkpoint chargé : {self.checkpoint_file}")
             except Exception as e:
-                self.logger.error(f"Error loading checkpoint: {str(e)}")
-                self._update_metrics('errors', f"Error loading checkpoint: {str(e)}")
+                self.logger.error(f"Erreur lors du chargement du checkpoint : {str(e)}")
+                self._update_metrics('errors', f"Erreur lors du chargement du checkpoint : {str(e)}")
 
     def crawl(self):
-        """
-        Starts the crawling process in three phases:
-            1. URL extraction.
-            2. Content extraction.
-            3. Content rewriting (if LLM enabled).
-        Also generates a report and a sitemap at the end of execution.
-        """
         start_time = time.time()
-        self.logger.info(f"Starting crawl of {self.start_url}")
+        self.logger.info(f"Démarrage de l'exploration de {self.start_url}")
 
         self.load_downloaded_files()
         self.load_checkpoint()
         error = None
         try:
-            # Phase 1: URL Extraction
-            self.logger.info("Phase 1: Starting URL extraction")
+            self.logger.info("Phase 1 : Démarrage de l'extraction des URLs")
             if not self.visited_pages:
-                # No checkpoint, start extraction
                 self.extract_urls(self.start_url)
                 self.save_checkpoint()
             else:
-                self.logger.info("Checkpoint found, skipping URL extraction phase.")
+                self.logger.info("Checkpoint trouvé, passage de la phase d'extraction des URLs.")
 
-            # Phase 2: Content Extraction
-            self.logger.info("Phase 2: Starting content extraction")
+            self.logger.info("Phase 2 : Démarrage de l'extraction du contenu")
             total_pages = len(self.visited_pages)
             if total_pages == 0:
-                self.logger.info("No pages to process.")
+                self.logger.info("Aucune page à traiter.")
             else:
                 with Progress(
                     SpinnerColumn(),
@@ -1316,7 +971,7 @@ class WebCrawler:
                     TimeRemainingColumn(),
                     console=self.console
                 ) as progress:
-                    task = progress.add_task("Extracting content", total=total_pages)
+                    task = progress.add_task("Extraction du contenu", total=total_pages)
 
                     with ThreadPoolExecutor(max_workers=self.concurrency) as executor:
                         futures = {executor.submit(self.extract_content, url): url for url in self.visited_pages}
@@ -1326,19 +981,17 @@ class WebCrawler:
                                 future.result()
                                 progress.advance(task)
                             except Exception as e:
-                                self.logger.error(f"Error extracting {url}: {str(e)}")
-                                self._update_metrics('errors', f"Error extracting {url}: {str(e)}")
+                                self.logger.error(f"Erreur lors de l'extraction de {url} : {str(e)}")
+                                self._update_metrics('errors', f"Erreur lors de l'extraction de {url} : {str(e)}")
                                 progress.advance(task)
-                self.logger.info("Phase 2: Content extraction completed.")
+                self.logger.info("Phase 2 : Extraction du contenu terminée.")
 
             self.save_checkpoint()
 
-            # Phase 3: Content Rewriting
             if self.llm_enabled:
-                self.logger.info("Phase 3: Starting content rewriting")
+                self.logger.info("Phase 3 : Démarrage de la réécriture du contenu")
                 self.content_rewriter.rewrite_all_contents()
 
-            # Generate Report
             end_time = time.time()
             duration = end_time - start_time
             self.generate_report(duration, error=error)
@@ -1346,8 +999,8 @@ class WebCrawler:
 
         except Exception as e:
             error = str(e)
-            self.logger.error(f"Critical error during crawl: {str(e)}")
-            self._update_metrics('errors', f"Critical error during crawl: {str(e)}")
+            self.logger.error(f"Erreur critique durant l'exploration : {str(e)}")
+            self._update_metrics('errors', f"Erreur critique durant l'exploration : {str(e)}")
 
         self.save_downloaded_files()
         if self.use_playwright and self.page:
@@ -1356,20 +1009,10 @@ class WebCrawler:
             self.playwright.stop()
 
     def stop_crawl(self):
-        """
-        Stops the crawling process by signaling an stop event.
-        """
-        self.logger.info("Stop signal received. Stopping crawler...")
+        self.logger.info("Signal d'arrêt reçu. Arrêt du crawler...")
         self.stop_event.set()
 
     def _update_metrics(self, key: str, value):
-        """
-        Updates global metrics in a thread-safe manner.
-
-        Args:
-            key (str): The metric key to update.
-            value: The value to add or increment.
-        """
         with metrics_lock:
             if key == 'errors':
                 metrics['errors'].append(value)
@@ -1382,39 +1025,22 @@ class WebCrawler:
 
 
 def load_config(config_path: str = 'config.json') -> dict:
-    """
-    Loads the configuration from a JSON file.
-
-    Args:
-        config_path (str, optional): Path to the configuration file. Defaults to 'config.json'.
-
-    Returns:
-        dict: Configuration dictionary.
-
-    Raises:
-        FileNotFoundError: If the configuration file is not found.
-        ValueError: If the JSON file is malformed.
-    """
     if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Configuration file {config_path} not found.")
+        raise FileNotFoundError(f"Le fichier de configuration {config_path} est introuvable.")
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
         return config_data
     except json.JSONDecodeError as e:
-        raise ValueError(f"JSON decoding error in {config_path}: {e}")
+        raise ValueError(f"Erreur de décodage JSON dans {config_path} : {e}")
 
 
 def main():
-    """
-    Main entry point of the script. Loads the configuration, initializes the crawler,
-    and starts the crawling process. Also handles user interruptions.
-    """
     try:
         config_data = load_config()
         config = Config.parse_obj(config_data)
     except (FileNotFoundError, ValueError, ValidationError) as e:
-        print(f"Configuration error: {e}")
+        print(f"Erreur de configuration : {e}")
         return
 
     crawler = WebCrawler(config.dict())
@@ -1429,7 +1055,7 @@ def main():
             crawler.page.close()
             crawler.browser.close()
             crawler.playwright.stop()
-        crawler.logger.info("Crawler stopped by user.")
+        crawler.logger.info("Crawler arrêté par l'utilisateur.")
 
 
 if __name__ == "__main__":
